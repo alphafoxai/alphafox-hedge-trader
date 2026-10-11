@@ -1,0 +1,5 @@
+/hedgectl
+/bin/
+.env
+.env.*
+*.local

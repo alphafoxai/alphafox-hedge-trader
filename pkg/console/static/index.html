@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="console-token" content="{{.Token}}">
+<meta name="console-live" content="{{.Live}}">
+<title>Paper Farm Console</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Paper Farm Console</div>
+  <div class="badges">
+    <span id="mode" class="badge"></span>
+    <span id="paused" class="badge"></span>
+    <span class="stat">铸造率 <b id="mintRate">–</b> PAPER/$</span>
+    <span class="stat muted" id="updated"></span>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="creds">
+    <h2>凭证 <small>只保存在本浏览器 localStorage；服务端不落盘</small></h2>
+    <div class="grid2">
+      <div>
+        <label>Paper 账户（主钱包地址）</label>
+        <div class="row"><input id="account" placeholder="0x…" spellcheck="false"><button id="connect">连接 OKX 钱包</button></div>
+      </div>
+      <div>
+        <label>Session key（只能交易/质押，不能提现）</label>
+        <div class="row"><input id="sessionAddr" readonly placeholder="未设置"><span id="sessionStatus" class="pill"></span></div>
+      </div>
+    </div>
+    <div class="row wrap">
+      <button id="newSession" class="primary">生成并用钱包注册 session key</button>
+      <button id="importKey">导入 key</button>
+      <button id="exportKey">显示 key</button>
+      <button id="forgetKey" class="danger">清除本地凭证</button>
+    </div>
+    <pre id="credsLog" class="log small" hidden></pre>
+  </section>
+
+  <section class="card" id="acct">
+    <h2>账户 <button class="link" id="refreshAcct">刷新</button></h2>
+    <div class="kpis">
+      <div><span>余额</span><b id="balance">–</b></div>
+      <div><span>可用</span><b id="available">–</b></div>
+      <div><span>PAPER 未质押</span><b id="paperBal">–</b></div>
+      <div><span>PAPER 已质押</span><b id="paperStaked">–</b></div>
+      <div><span>待领取分红</span><b id="pending">–</b></div>
+    </div>
+    <div class="row wrap">
+      <button id="stakeAll">质押全部 PAPER</button>
+      <button id="claim">领取分红</button>
+    </div>
+    <h3>持仓</h3>
+    <div class="scroll"><table id="positions"><thead><tr>
+      <th></th><th>ID</th><th>品种</th><th>方向</th><th>杠杆</th><th>保证金</th><th>入场</th><th>现价</th><th>浮动</th><th>距爆仓</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="row"><button id="closeSelected" class="danger">平仓所选（一个 intent）</button></div>
+  </section>
+
+  <section class="card" id="reco">
+    <h2>波动率与推荐参数</h2>
+    <div class="row wrap inputs">
+      <label>总资金 $ <input id="capital" type="number" min="0" step="10"></label>
+      <label>可接受平均等待 <select id="hours">
+        <option value="0.25">15 分钟</option><option value="0.5">30 分钟</option><option value="1">1 小时</option>
+        <option value="2" selected>2 小时</option><option value="4">4 小时</option><option value="8">8 小时</option></select></label>
+      <label>波动率窗口 <select id="window">
+        <option value="1h">1 小时</option><option value="6h" selected>6 小时</option><option value="24h">24 小时</option><option value="72h">3 天</option></select></label>
+      <span class="muted">资金在 BTC / ETH 间平分；推荐用滚动 1 分钟 K 线实现波动率</span>
+    </div>
+    <div class="grid2" id="recoCards"></div>
+  </section>
+
+  <section class="card" id="farm">
+    <h2>策略运行</h2>
+    <div class="grid2" id="runCards"></div>
+  </section>
+
+  <section class="card">
+    <h2>最近成交</h2>
+    <div class="scroll"><table id="trades"><thead><tr>
+      <th>时间</th><th>仓位</th><th>品种</th><th>方向</th><th>杠杆</th><th>入场</th><th>出场</th><th>盈亏</th><th>手续费</th><th>PAPER</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+<div id="toast" hidden></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>

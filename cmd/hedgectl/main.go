@@ -52,6 +52,8 @@ const usage = `usage:
   hedgectl paper stake         -amount 100 | -all [-live]
   hedgectl paper claim         [-live]
 
+  hedgectl web [-listen 127.0.0.1:8547] [-live]   # local console: volatility, recommendations, runs
+
   hedgectl farm run -coin BTC -margin 10 -leverage 1000 -close-move 0.0003 -bust-guard 0.0001 [-cycles 1] [-max-hold 0] [-stake] [-live]`
 
 func main() {
@@ -64,6 +66,9 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if len(args) >= 1 && args[0] == "web" {
+		return runWeb(ctx, args[1:])
+	}
 	if len(args) < 2 {
 		return errors.New(usage)
 	}

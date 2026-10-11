@@ -162,14 +162,5 @@ func runFarm(ctx context.Context, cmd string, rest []string) error {
 
 // hyperliquidMid tracks the Hyperliquid BBO mid, the price Paper settles at.
 func hyperliquidMid(info *hyperliquid.InfoClient) farm.PriceFunc {
-	return func(ctx context.Context, symbol string) (decimal.Decimal, error) {
-		b, err := info.L2Book(ctx, symbol)
-		if err != nil {
-			return decimal.Zero, err
-		}
-		if len(b.Levels[0]) == 0 || len(b.Levels[1]) == 0 {
-			return decimal.Zero, fmt.Errorf("hyperliquid %s book is one-sided", symbol)
-		}
-		return b.Levels[0][0].Px.Add(b.Levels[1][0].Px).Div(decimal.NewFromInt(2)), nil
-	}
+	return func(ctx context.Context, symbol string) (decimal.Decimal, error) { return info.Mid(ctx, symbol) }
 }

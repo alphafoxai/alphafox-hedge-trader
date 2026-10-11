@@ -24,4 +24,6 @@
 3. 手动 `paper close -ids 136880,136881 -live`：一个 Close intent 同时平两腿，都以 83004.5 平仓，盈亏/手续费/铸造均为 0。
 4. 新发现：trades 路由只接受 `limit=75`，其他值 HTTP 400；客户端固定请求 75 再本地截断。
 
+5. 浏览器直连 relayer 被 CORS 拒绝（`/state/trading` 对外部 Origin 返回 400，`/intents` 的 OPTIONS 返回 405；仅 SSE 有 `ACAO: *`），因此 Web 控制台走本机代理。
+
 仍未验证：真实价格移动后的成本/PAPER 与 `paper econ` 的偏差；relayer 是否接受非默认 deadline；旧 build 头是否被拒；爆仓在成交历史中的 `kind`。

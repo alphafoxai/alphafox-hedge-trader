@@ -46,6 +46,7 @@ const usage = `usage:
   hedgectl paper session-new
   hedgectl paper register-data -session 0xKEY [-days 30]
   hedgectl paper register      -data typed.json -signature 0xSIG [-live]
+  hedgectl paper register-web  [-listen 127.0.0.1:8547] [-days 30] [-live]   # sign in a browser wallet
   hedgectl paper open          -coin BTC -side long|short -margin 10 -leverage 1000 [-live]
   hedgectl paper close         -ids 1,2 [-live]
   hedgectl paper stake         -amount 100 | -all [-live]

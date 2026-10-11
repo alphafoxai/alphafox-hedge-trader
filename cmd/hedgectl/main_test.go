@@ -3,16 +3,21 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/shopspring/decimal"
 
+	"github.com/alphafoxai/alphafox-hedge-trader/pkg/evmsign"
 	"github.com/alphafoxai/alphafox-hedge-trader/pkg/hyperliquid"
 )
 
@@ -106,5 +111,58 @@ func TestHyperliquidMid(t *testing.T) {
 	px, err := hyperliquidMid(hyperliquid.NewInfoClientWithBaseURL(srv.URL, nil))(context.Background(), "BTC")
 	if err != nil || !px.Equal(decimal.RequireFromString("83000.5")) {
 		t.Fatalf("mid %s, %v", px, err)
+	}
+}
+
+func TestRegisterWebDryRun(t *testing.T) {
+	fakeRelayer(t)
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := ln.Addr().String()
+	ln.Close()
+	master, _ := crypto.GenerateKey()
+	wallet, _ := evmsign.NewLocalSigner("0x" + hex.EncodeToString(crypto.FromECDSA(master)))
+	t.Setenv("PAPER_ACCOUNT_ADDRESS", "")
+
+	errc := make(chan error, 1)
+	go func() { errc <- registerWeb(context.Background(), addr, 30, false) }()
+	base := "http://" + addr
+	var page *http.Response
+	for i := 0; i < 50; i++ {
+		var err error
+		if page, err = http.Get(base + "/"); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if page == nil || page.StatusCode != 200 {
+		t.Fatal("page not served")
+	}
+	page.Body.Close()
+
+	r, err := http.Post(base+"/typed-data", "application/json", strings.NewReader(`{"address":"`+wallet.Address().Hex()+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var td apitypes.TypedData
+	if err := json.NewDecoder(r.Body).Decode(&td); err != nil || td.PrimaryType != "RegisterSessionKey" {
+		t.Fatalf("typed data %+v %v", td, err)
+	}
+	r.Body.Close()
+	sig, err := wallet.SignTypedData(td) // what the browser wallet does
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.TrimPrefix(sig.R, "0x") + strings.TrimPrefix(sig.S, "0x") + hex.EncodeToString([]byte{byte(sig.V)})
+	r, err = http.Post(base+"/signature", "application/json", strings.NewReader(`{"signature":"0x`+raw+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if r.StatusCode != 200 || !strings.Contains(string(body), `"dryRun":true`) {
+		t.Fatalf("%d %s", r.StatusCode, body)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
 	}
 }

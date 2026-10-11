@@ -73,6 +73,7 @@ func runPaper(ctx context.Context, cmd string, rest []string) error {
 	ids := fs.String("ids", "", "comma-separated position ids")
 	amount := fs.String("amount", "", "PAPER amount")
 	all := fs.Bool("all", false, "stake the whole unstaked PAPER balance")
+	listen := fs.String("listen", "127.0.0.1:8547", "loopback address for register-web")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -170,6 +171,12 @@ func runPaper(ctx context.Context, cmd string, rest []string) error {
 		}
 		fmt.Fprintln(os.Stderr, "Sign this with the master wallet (eth_signTypedData_v4) within one hour, then run `paper register -data <file> -signature <sig>`.")
 		return printJSON(td, nil)
+
+	case "register-web":
+		if *days < 1 || *days > 30 {
+			return errors.New("-days must be 1..30")
+		}
+		return registerWeb(ctx, *listen, *days, *live)
 
 	case "register":
 		user, err := paperUser()

@@ -180,6 +180,9 @@ func TestSettledFromTrades(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("settled %+v", got)
 	}
+	if two, err := acct.Client.Trades(context.Background(), liveUser, 2); err != nil || len(two) != 2 {
+		t.Fatalf("Trades(limit 2) = %d rows, %v; must still request limit=75", len(two), err)
+	}
 	short, long := got[0], got[1]
 	if !short.PnL.Equal(decimal.RequireFromString("1142.362430882975095144")) || !short.Exit.Equal(decimal.RequireFromString("82969.5")) {
 		t.Fatalf("winner %+v", short)

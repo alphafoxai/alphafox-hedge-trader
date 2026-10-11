@@ -17,8 +17,11 @@
 | 结算 | `/query/accounts/{addr}/trades`；盈利方实收 = adjustedPnl − fee | 真实样本 |
 | 参数 | `/state/trading`（暂停、最小保证金 $10、最小名义 $10k、市场参数）；`/query/protocol/summary`（铸造曲线） | 真实样本 |
 
-## 上线前仍需真实验证（需授权）
+## 实盘验证（2026-10-11，账户 `0xFd0c…161D`）
 
-1. 主钱包签 `RegisterSessionKey` 并提交，确认 relayer 接受。
-2. 充值约 20U，跑 1 个 `farm run -live` 周期，核对实际成本/PAPER 与 `paper econ` 估算。
-3. 未知项：relayer 是否接受非默认 deadline（`-intent-ttl`）；旧 build 头是否被拒；爆仓在成交历史中的 `kind` 名称。
+1. `paper register-web -live`：OKX 钱包签 RegisterSessionKey，relayer 接受，session key 随即出现在钱包 SSE 中。
+2. `farm run -live`（BTC 1000x，每腿 $10）：两腿 3 秒内同价 83004.5 开出，爆仓价距入场 0.0525%。
+3. 手动 `paper close -ids 136880,136881 -live`：一个 Close intent 同时平两腿，都以 83004.5 平仓，盈亏/手续费/铸造均为 0。
+4. 新发现：trades 路由只接受 `limit=75`，其他值 HTTP 400；客户端固定请求 75 再本地截断。
+
+仍未验证：真实价格移动后的成本/PAPER 与 `paper econ` 的偏差；relayer 是否接受非默认 deadline；旧 build 头是否被拒；爆仓在成交历史中的 `kind`。

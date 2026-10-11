@@ -14,8 +14,6 @@ import (
 type Account struct {
 	Client  *Client
 	Intents *Intents
-	// HistoryLimit is how many recent closes Settled scans.
-	HistoryLimit int
 }
 
 var _ farm.Exchange = (*Account)(nil)
@@ -89,11 +87,7 @@ func toFarmPosition(p Position) (farm.Position, error) {
 
 // Settled finds the closes for positionIDs in recent history.
 func (a *Account) Settled(ctx context.Context, positionIDs []string) ([]farm.Settled, error) {
-	limit := a.HistoryLimit
-	if limit <= 0 {
-		limit = 75
-	}
-	trades, err := a.Client.Trades(ctx, a.Intents.User(), limit)
+	trades, err := a.Client.Trades(ctx, a.Intents.User(), 0)
 	if err != nil {
 		return nil, err
 	}

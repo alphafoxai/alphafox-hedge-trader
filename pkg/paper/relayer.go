@@ -223,13 +223,23 @@ type Trade struct {
 	PaperMintBasisRaw string `json:"paperMintBasisRaw"`
 }
 
-// Trades returns the most recent closes, newest first.
+// TradesPage is the only page size the trades route accepts; any other
+// limit is rejected with HTTP 400 (seen live 2026-10-11).
+const TradesPage = 75
+
+// Trades returns up to limit of the most recent closes, newest first;
+// limit <= 0 or above TradesPage returns one full page.
 func (c *Client) Trades(ctx context.Context, user common.Address, limit int) ([]Trade, error) {
 	var res struct {
 		Items []Trade `json:"items"`
 	}
-	err := c.get(ctx, fmt.Sprintf("/query/accounts/%s/trades?limit=%d", wireAddress(user), limit), &res)
-	return res.Items, err
+	if err := c.get(ctx, fmt.Sprintf("/query/accounts/%s/trades?limit=%d", wireAddress(user), TradesPage), &res); err != nil {
+		return nil, err
+	}
+	if limit > 0 && limit < len(res.Items) {
+		res.Items = res.Items[:limit]
+	}
+	return res.Items, nil
 }
 
 // MarketParams are the per-instrument limits and impact parameters.

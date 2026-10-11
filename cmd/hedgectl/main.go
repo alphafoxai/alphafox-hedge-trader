@@ -1,13 +1,18 @@
-// Command hedgectl trades a Hyperliquid account through an agent wallet and
-// runs the Paper/Hyperliquid hedge. Every write is a dry run (signed, never
-// posted) unless -live is passed.
+// Command hedgectl trades Hyperliquid through an agent wallet and farms
+// Papertrade PAPER with same-platform long+short pairs. Every write is a dry
+// run (signed, never posted) unless -live is passed.
 //
 // Environment:
 //
-//	HL_NETWORK            mainnet | testnet (required, no default)
-//	HL_ACCOUNT_ADDRESS    master wallet the agent trades for
-//	HL_AGENT_PRIVATE_KEY  agent (API) wallet key; never the master key
-//	HL_BUILDER_ADDRESS    optional builder; HL_BUILDER_FEE in tenths of a bp
+//	HL_NETWORK                 mainnet | testnet (hl commands)
+//	HL_ACCOUNT_ADDRESS         master wallet the agent trades for
+//	HL_AGENT_PRIVATE_KEY       agent (API) wallet key; never the master key
+//	HL_BUILDER_ADDRESS         optional builder; HL_BUILDER_FEE in tenths of a bp
+//	PAPER_ACCOUNT_ADDRESS      Papertrade master wallet (paper/farm commands)
+//	PAPER_SESSION_PRIVATE_KEY  registered Paper session key; it can trade and
+//	                           stake but not withdraw. Never the master key.
+//	PAPER_RELAYER_URL          optional, default https://exchange.papertrade.xyz
+//	PAPER_BUILD                optional X-Papertrade-Build override
 package main
 
 import (
@@ -19,14 +24,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"time"
 
 	"github.com/shopspring/decimal"
 
 	"github.com/alphafoxai/alphafox-hedge-trader/pkg/evmsign"
-	"github.com/alphafoxai/alphafox-hedge-trader/pkg/hedge"
 	"github.com/alphafoxai/alphafox-hedge-trader/pkg/hyperliquid"
-	"github.com/alphafoxai/alphafox-hedge-trader/pkg/paper"
 	"github.com/alphafoxai/alphafox-hedge-trader/pkg/venue"
 )
 
@@ -36,8 +38,20 @@ const usage = `usage:
   hedgectl hl order    -coin BTC -side buy|sell -size 0.001 [-price P] [-tif Ioc|Gtc|Alo] [-reduce-only] [-slippage 0.01] [-live]
   hedgectl hl cancel   -coin BTC -oid 123 [-live]
   hedgectl hl leverage -coin BTC -leverage 10 [-isolated] [-live]
-  hedgectl hedge open  -coin BTC -mint-side buy|sell -size 0.001 [-paper-leverage 100] [-live]
-  hedgectl hedge close -coin BTC [-live]`
+
+  hedgectl paper status
+  hedgectl paper econ          -coin BTC -notional 10000 [-moves 0.0003,0.001,0.005] [-mint-rate R]
+  hedgectl paper account
+  hedgectl paper trades        [-limit 20]
+  hedgectl paper session-new
+  hedgectl paper register-data -session 0xKEY [-days 30]
+  hedgectl paper register      -data typed.json -signature 0xSIG [-live]
+  hedgectl paper open          -coin BTC -side long|short -margin 10 -leverage 1000 [-live]
+  hedgectl paper close         -ids 1,2 [-live]
+  hedgectl paper stake         -amount 100 | -all [-live]
+  hedgectl paper claim         [-live]
+
+  hedgectl farm run -coin BTC -margin 10 -leverage 1000 -close-move 0.0003 -bust-guard 0.0001 [-cycles 1] [-max-hold 0] [-stake] [-live]`
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -52,12 +66,22 @@ func run(ctx context.Context, args []string) error {
 	if len(args) < 2 {
 		return errors.New(usage)
 	}
-	group, cmd, rest := args[0], args[1], args[2:]
-	fs := flag.NewFlagSet(group+" "+cmd, flag.ContinueOnError)
-	coin := fs.String("coin", "BTC", "coin / symbol")
+	switch args[0] {
+	case "hl":
+		return runHyperliquid(ctx, args[1], args[2:])
+	case "paper":
+		return runPaper(ctx, args[1], args[2:])
+	case "farm":
+		return runFarm(ctx, args[1], args[2:])
+	}
+	return errors.New(usage)
+}
+
+func runHyperliquid(ctx context.Context, cmd string, rest []string) error {
+	fs := flag.NewFlagSet("hl "+cmd, flag.ContinueOnError)
+	coin := fs.String("coin", "BTC", "coin")
 	live := fs.Bool("live", false, "post signed actions (default: dry run)")
 	side := fs.String("side", "", "buy or sell")
-	mintSide := fs.String("mint-side", "", "Paper leg side; the Hyperliquid leg takes the opposite")
 	size := fs.String("size", "", "base size")
 	price := fs.String("price", "", "limit price; empty for market")
 	tif := fs.String("tif", "Gtc", "time in force for limit orders")
@@ -66,32 +90,23 @@ func run(ctx context.Context, args []string) error {
 	oid := fs.String("oid", "", "order id")
 	leverage := fs.Int("leverage", 0, "leverage")
 	isolated := fs.Bool("isolated", false, "isolated margin")
-	paperLeverage := fs.Int("paper-leverage", 100, "Paper leverage (1..1000)")
-	maxSpread := fs.String("max-spread-bps", "2", "refuse to open above this Hyperliquid spread")
-	bookShare := fs.String("max-book-share", "0.5", "max share of Hyperliquid top-of-book size")
-	closeTimeout := fs.Duration("close-timeout", 5*time.Minute, "max wait for Paper's queued close")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-
-	limits := map[string]decimal.Decimal{}
-	for name, raw := range map[string]string{"slippage": *slippage, "max-spread-bps": *maxSpread, "max-book-share": *bookShare} {
-		v, err := decimal.NewFromString(raw)
-		if err != nil {
-			return fmt.Errorf("-%s: %w", name, err)
-		}
-		limits[name] = v
+	slip, err := decimal.NewFromString(*slippage)
+	if err != nil {
+		return fmt.Errorf("-slippage: %w", err)
 	}
-	hl, err := newHyperliquid(!*live, limits["slippage"])
+	hl, err := newHyperliquid(!*live, slip)
 	if err != nil {
 		return err
 	}
-	switch group + " " + cmd {
-	case "hl quote":
+	switch cmd {
+	case "quote":
 		return printJSON(hl.Quote(ctx, *coin))
-	case "hl position":
+	case "position":
 		return printJSON(hl.Position(ctx, *coin))
-	case "hl order":
+	case "order":
 		req := venue.OrderRequest{Symbol: *coin, Side: venue.Side(*side), TimeInForce: venue.TimeInForce(*tif), ReduceOnly: *reduceOnly}
 		if req.Side != venue.Buy && req.Side != venue.Sell {
 			return errors.New("-side must be buy or sell")
@@ -105,36 +120,10 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		return printJSON(hl.PlaceOrder(ctx, req))
-	case "hl cancel":
+	case "cancel":
 		return hl.CancelOrder(ctx, *coin, *oid)
-	case "hl leverage":
+	case "leverage":
 		return hl.SetLeverage(ctx, *coin, *leverage, !*isolated)
-	case "hedge open", "hedge close":
-		// The Paper gateway is reserved; until it is wired the engine refuses
-		// before sending any Hyperliquid order.
-		pv, err := paper.NewVenue(paper.Config{Leverage: *paperLeverage}, nil)
-		if err != nil {
-			return err
-		}
-		engine, err := hedge.New(hedge.Config{
-			Mint: hedge.Leg{Venue: pv, Symbol: *coin}, Hedge: hedge.Leg{Venue: hl, Symbol: *coin},
-			MaxSpreadBps: limits["max-spread-bps"], MaxBookShare: limits["max-book-share"],
-			Slippage: limits["slippage"], CloseTimeout: *closeTimeout, PollInterval: 2 * time.Second,
-		})
-		if err != nil {
-			return err
-		}
-		if cmd == "close" {
-			return printJSON(engine.Close(ctx))
-		}
-		sz, err := decimal.NewFromString(*size)
-		if err != nil {
-			return fmt.Errorf("-size: %w", err)
-		}
-		if s := venue.Side(*mintSide); s != venue.Buy && s != venue.Sell {
-			return errors.New("-mint-side must be buy or sell")
-		}
-		return printJSON(engine.Open(ctx, venue.Side(*mintSide), sz))
 	}
 	return errors.New(usage)
 }

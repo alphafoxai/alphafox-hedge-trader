@@ -1,117 +1,102 @@
-// Package paper is the reserved adapter for the Paper perp venue: a
-// loss-mining perp that settles against Hyperliquid prices, lists BTC and
-// ETH up to 1000x, has no public API, and is driven by wallet signatures.
+// Package paper drives Papertrade (exchange.papertrade.xyz), a loss-mining
+// perp on HyperEVM that settles every trade against its LP at the
+// Hyperliquid BBO mid. Paper has no order book and no public API: trades are
+// EIP-712 intents signed by a session key and posted to the official relayer,
+// which batches them on chain.
 //
-// The on-chain flow is not known yet (see docs/paper-integration.md). Until it
-// is, Venue routes every call through a Gateway; with no Gateway it returns
-// venue.ErrNotImplemented so a hedge can never open a one-legged position by
-// accident.
+// The wire format was reverse-engineered from the official frontend and
+// checked against on-chain intents (see docs/paper-research.md); the golden
+// tests pin it.
 package paper
 
 import (
-	"context"
 	"fmt"
+	"math/big"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
-
-	"github.com/alphafoxai/alphafox-hedge-trader/pkg/venue"
 )
 
-// MaxLeverage is Paper's advertised ceiling.
-const MaxLeverage = 1000
+// ChainID is HyperEVM mainnet.
+const ChainID = 999
 
-// Symbols Paper lists. Names follow Hyperliquid coins so a hedge pair shares
-// one symbol.
-var Symbols = []string{"BTC", "ETH"}
+const (
+	DefaultRelayerURL = "https://exchange.papertrade.xyz"
+	// DefaultBuild is the frontend build id sent as X-Papertrade-Build. It
+	// changes on every frontend deploy; override it if the relayer rejects
+	// stale builds.
+	DefaultBuild = "7976669c6bab"
+)
 
-// Gateway is what the on-chain integration has to provide. It is shaped by
-// what Paper's UI exposes (open with leverage, close whole position, read
-// position and mark), not by an order book: Paper has none.
-type Gateway interface {
-	// Open adds size (base units, signed by side) at the venue price.
-	Open(ctx context.Context, symbol string, side venue.Side, size decimal.Decimal, leverage int) (venue.OrderResult, error)
-	// Close requests a full close. Paper queues closes, so OrderPending is a
-	// normal result; callers confirm with Position.
-	Close(ctx context.Context, symbol string) (venue.OrderResult, error)
-	Position(ctx context.Context, symbol string) (venue.Position, error)
-	MarkPrice(ctx context.Context, symbol string) (decimal.Decimal, error)
+var (
+	ExchangeAddress   = common.HexToAddress("0x6cd5661646289fb6e65ea5c032310fded797d0a2")
+	StakingAddress    = common.HexToAddress("0xaad6c7b0cc3014fc80ffedae0ed7ce5967b0f016")
+	TokenAddress      = common.HexToAddress("0xe40f17915daa230324030003a197cdaef2261c0e")
+	TokenomicsAddress = common.HexToAddress("0x75174549dbbd44497d31a47e2e2d7406408d63d9")
+)
+
+const (
+	MaxLeverage = 1000
+	// MaxCloseIDs is the frontend's batch size for one Close intent; the
+	// relayer validator accepts up to 25.
+	MaxCloseIDs = 12
+)
+
+// Instrument is one Paper market. PriceScale converts raw prices:
+// price = raw / PriceScale.
+type Instrument struct {
+	ID         uint32
+	Symbol     string
+	PriceScale int64
 }
 
-type Config struct {
-	// Leverage is applied to every Open. Higher leverage needs less margin
-	// but liquidates sooner if the hedge leg is late.
-	Leverage int
+var instruments = []Instrument{
+	{ID: 0, Symbol: "BTC", PriceScale: 10},
+	{ID: 1, Symbol: "ETH", PriceScale: 100},
 }
 
-type Venue struct {
-	cfg     Config
-	gateway Gateway
-}
-
-var _ venue.Venue = (*Venue)(nil)
-
-// NewVenue accepts a nil gateway: the venue is then a placeholder whose
-// every call fails with venue.ErrNotImplemented.
-func NewVenue(cfg Config, gateway Gateway) (*Venue, error) {
-	if cfg.Leverage < 1 || cfg.Leverage > MaxLeverage {
-		return nil, fmt.Errorf("paper leverage %d outside 1..%d", cfg.Leverage, MaxLeverage)
+func InstrumentBySymbol(symbol string) (Instrument, error) {
+	for _, in := range instruments {
+		if in.Symbol == symbol {
+			return in, nil
+		}
 	}
-	return &Venue{cfg: cfg, gateway: gateway}, nil
+	return Instrument{}, fmt.Errorf("paper has no instrument %q (BTC, ETH)", symbol)
 }
 
-func (v *Venue) Name() string { return "paper" }
-
-func (v *Venue) ready(op string) error {
-	if v.gateway == nil {
-		return fmt.Errorf("paper %s: %w", op, venue.ErrNotImplemented)
+func InstrumentByID(id uint32) (Instrument, error) {
+	for _, in := range instruments {
+		if in.ID == id {
+			return in, nil
+		}
 	}
-	return nil
+	return Instrument{}, fmt.Errorf("paper has no instrument id %d", id)
 }
 
-// Quote reports the mark as both sides: Paper fills at the venue price with
-// no book, so there is no spread or depth to check.
-func (v *Venue) Quote(ctx context.Context, symbol string) (venue.Quote, error) {
-	if err := v.ready("quote"); err != nil {
-		return venue.Quote{}, err
-	}
-	mark, err := v.gateway.MarkPrice(ctx, symbol)
+// Price converts a raw price string.
+func (in Instrument) Price(raw string) (decimal.Decimal, error) {
+	d, err := decimal.NewFromString(raw)
 	if err != nil {
-		return venue.Quote{}, err
+		return decimal.Zero, fmt.Errorf("raw price %q: %w", raw, err)
 	}
-	return venue.Quote{Symbol: symbol, Bid: mark, Ask: mark}, nil
+	return d.Div(decimal.NewFromInt(in.PriceScale)), nil
 }
 
-// PlaceOrder maps reduce-only orders to Close (Paper closes whole positions)
-// and everything else to Open. Limit prices are not supported.
-func (v *Venue) PlaceOrder(ctx context.Context, req venue.OrderRequest) (venue.OrderResult, error) {
-	if err := v.ready("place order"); err != nil {
-		return venue.OrderResult{}, err
-	}
-	if !req.IsMarket() {
-		return venue.OrderResult{}, fmt.Errorf("paper limit orders: %w", venue.ErrNotImplemented)
-	}
-	if req.ReduceOnly {
-		return v.gateway.Close(ctx, req.Symbol)
-	}
-	return v.gateway.Open(ctx, req.Symbol, req.Side, req.Size, v.cfg.Leverage)
-}
+// USD amounts (margin, balances, PnL) and PAPER amounts are 18-decimal raw
+// integers on the wire.
+var unit = decimal.New(1, 18)
 
-func (v *Venue) CancelOrder(ctx context.Context, symbol, orderID string) error {
-	return fmt.Errorf("paper cancel: %w", venue.ErrNotImplemented)
-}
+// ToRaw converts a USD or PAPER amount to its raw integer, truncating dust.
+func ToRaw(v decimal.Decimal) *big.Int { return v.Mul(unit).Truncate(0).BigInt() }
 
-func (v *Venue) Position(ctx context.Context, symbol string) (venue.Position, error) {
-	if err := v.ready("position"); err != nil {
-		return venue.Position{}, err
+// FromRaw parses a raw 18-decimal integer string; empty means zero.
+func FromRaw(raw string) (decimal.Decimal, error) {
+	if raw == "" {
+		return decimal.Zero, nil
 	}
-	return v.gateway.Position(ctx, symbol)
-}
-
-// SetLeverage is per-open on Paper; it only updates the configured value.
-func (v *Venue) SetLeverage(ctx context.Context, symbol string, leverage int, cross bool) error {
-	if leverage < 1 || leverage > MaxLeverage {
-		return fmt.Errorf("paper leverage %d outside 1..%d", leverage, MaxLeverage)
+	d, err := decimal.NewFromString(raw)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("raw amount %q: %w", raw, err)
 	}
-	v.cfg.Leverage = leverage
-	return nil
+	return d.Shift(-18), nil
 }

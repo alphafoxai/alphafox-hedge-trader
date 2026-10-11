@@ -107,6 +107,14 @@ EIP-712 类型（前端代码）：
 - `RegisterSessionKey(address user, address key, uint64 expiry, address feeAddress, uint256 nonce, uint64 deadline)`。
 - deadline = 当前秒 + 3600。
 
-域名字段在前端代码里显示为 `{name: "String", version: "1"}`，合约代理不暴露 `eip712Domain()`，需用一次真实签名核对后再实现。
+域名 `{name: "String", version: "1"}` 已用链上真实 Open/Close intent 核对（恢复出的签名者与 intentId 一致），见 `pkg/paper/intent_test.go`。
 
 可读的链上视图：Exchange `treasury / sideBucket / totalQueued / lpBankrollAvailable / instruments(uint32) / positions(uint256) / balances(address)`，Tokenomics `trackedLpUsd / tailProgressUsd / flatRate / lpFlatThresholdUsd / tailDecayScaleUsd`。
+
+## 6. 同平台多空（2026-10-11 补充）
+
+放弃 HL 对冲腿：同一账户开等额多空，任一腿逆向移动达到阈值时用一个 Close intent 同时平两腿。
+
+- 结算：亏损腿铸造 PAPER（队列为空时铸造基数 = 亏损 × 0.98），盈利腿实收 adjustedPnl − 2%。真实同块平仓（tx `0x1f91865e…`，BTC 200x）与模型误差 < 0.25%。
+- 最小保证金 $10、最小名义 $10k：20U 只能 1000x，爆仓距离 ≈ 1/lev − 0.0005 ≈ 0.05%。
+- 成本（BTC，每腿 $10k 名义，铸造率 ≈ 36.7）：移动 0.1% ≈ $0.0077/PAPER，0.5% ≈ $0.0043；1000x 只能做 ≈0.03% 移动，≈ $0.014/PAPER。资金越多越能用低杠杆、大移动，单位成本越低。

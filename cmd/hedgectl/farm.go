@@ -100,7 +100,7 @@ func runFarm(ctx context.Context, cmd string, rest []string) error {
 		return printJSON(map[string]any{
 			"paused":       ts.Paused,
 			"notional":     notional,
-			"bustDistance": paper.MaxSafeMove(cfg.Leverage) + paper.BustBuffer,
+			"bustDistance": paper.MaxSafeMove(cfg.Leverage),
 			"mintRate":     summary.MintRate(),
 			"perCycle":     estimate,
 			"cycles":       *cycles,

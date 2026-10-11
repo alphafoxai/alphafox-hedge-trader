@@ -6,6 +6,7 @@
 <meta name="console-token" content="{{.Token}}">
 <meta name="console-live" content="{{.Live}}">
 <title>Paper Farm Console</title>
+<script>try { const t = localStorage.getItem('pf.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}</script>
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
@@ -16,6 +17,7 @@
     <span id="paused" class="badge"></span>
     <span class="stat">铸造率 <b id="mintRate">–</b> PAPER/$</span>
     <span class="stat muted" id="updated"></span>
+    <button id="theme" title="切换亮色 / 暗色"></button>
   </div>
 </header>
 

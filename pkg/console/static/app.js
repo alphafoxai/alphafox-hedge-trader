@@ -7,7 +7,7 @@ const LIVE = document.querySelector('meta[name=console-live]').content === 'true
 const SYMBOLS = ['BTC', 'ETH'];
 const SCALE = {0: 10, 1: 100}; // raw price scale by instrument id
 const SYM = {0: 'BTC', 1: 'ETH'};
-const LS = {account: 'pf.account', key: 'pf.sessionKey', keyAddr: 'pf.sessionAddr', prefs: 'pf.prefs', run: 'pf.run.'};
+const LS = {account: 'pf.account', key: 'pf.sessionKey', keyAddr: 'pf.sessionAddr', prefs: 'pf.prefs', theme: 'pf.theme', run: 'pf.run.'};
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -263,7 +263,7 @@ function renderReco() {
     const ratio = v.sigmaDayWindow ? v.sigmaPerSqrtHour / v.sigmaDayWindow : 0;
     let body = `<dl>
       <dt>中间价</dt><dd>${num(v.mid, 2)}</dd>
-      <dt>σ（${esc(m.window)} 窗口）</dt><dd>${pct(v.sigmaPerSqrtHour)} / √h
+      <dt>σ（${esc($('window').selectedOptions[0].text)} 窗口）</dt><dd>${pct(v.sigmaPerSqrtHour)} / √h
         ${ratio ? `<span class="${ratio > 1.2 ? 'warn' : 'muted'}">（24h 的 ${ratio.toFixed(2)}×）</span>` : ''}</dd>
       <dt>σ（24h）</dt><dd>${pct(v.sigmaDayWindow)} / √h</dd>
       <dt>最大杠杆</dt><dd>${v.maxLeverage || '–'}x</dd>`;
@@ -425,9 +425,28 @@ async function refreshRuns() {
   if (changed) refreshAccount();
 }
 
+// --- theme ----------------------------------------------------------------
+
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function currentTheme() {
+  return document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
+}
+function renderThemeButton() {
+  $('theme').textContent = currentTheme() === 'dark' ? '☀ 亮色' : '☾ 暗色';
+}
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  store.set(LS.theme, next);
+  renderThemeButton();
+}
+
 // --- boot -----------------------------------------------------------------
 
 function init() {
+  renderThemeButton();
+  $('theme').addEventListener('click', toggleTheme);
+  darkQuery.addEventListener('change', renderThemeButton);
   const mode = $('mode');
   mode.textContent = LIVE ? '实盘 LIVE' : 'DRY-RUN（不提交）';
   mode.className = 'badge ' + (LIVE ? 'live' : 'dry');

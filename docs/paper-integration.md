@@ -1,5 +1,7 @@
 # Paper 接入（待办）
 
+> 规则、链上参数、合约地址与 EIP-712 类型的调研结论见 `paper-research.md`（2026-10-11）。
+
 Paper 没有公开 API，只能通过钱包协议用程序下单。`pkg/paper.Gateway` 是唯一需要实现的接缝：
 
 ```go

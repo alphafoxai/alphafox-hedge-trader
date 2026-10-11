@@ -17,7 +17,7 @@
 | 结算 | `/query/accounts/{addr}/trades`；盈利方实收 = adjustedPnl − fee | 真实样本 |
 | 参数 | `/state/trading`（暂停、最小保证金 $10、最小名义 $10k、市场参数）；`/query/protocol/summary`（铸造曲线） | 真实样本 |
 
-## 实盘验证（2026-10-11，账户 `0xFd0c…161D`）
+## 实盘验证（2026-10-11）
 
 1. `paper register-web -live`：OKX 钱包签 RegisterSessionKey，relayer 接受，session key 随即出现在钱包 SSE 中。
 2. `farm run -live`（BTC 1000x，每腿 $10）：两腿 3 秒内同价 83004.5 开出，爆仓价距入场 0.0525%。

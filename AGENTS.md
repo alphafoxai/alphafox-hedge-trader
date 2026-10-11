@@ -8,4 +8,5 @@ AlphaFox workspace rules apply (`~/Desktop/Projects/alphafox/AGENTS.md`); load t
 - Strategy code depends on interfaces (`pkg/venue`, `farm.Exchange`), never on a concrete venue package.
 - Writes default to dry run. Never commit private keys or `.env` files. Runtime config holds only Hyperliquid agent keys and Paper session keys; the Paper master wallet only signs `RegisterSessionKey` out of band and its key never enters this repo.
 - `pkg/farm` safety invariants, each covered by a test: refuse to start when the symbol is not flat; a one-legged open is closed immediately; both legs close in one intent; cancellation never leaves an unlogged position; the bust guard closes before liquidation. Change one only with a test showing the new behaviour.
+- `pkg/console` binds loopback only and requires the page token and a loopback Host on every `/api` call. The server must never persist a session key or echo it back (`Run.view` strips it); keep `TestGuards` and the run tests green.
 - Live mainnet intents, session-key registration, funding, and deployment need explicit authorization.

@@ -122,3 +122,36 @@ func (c *InfoClient) OpenOrders(ctx context.Context, user string) ([]OpenOrder, 
 	err := c.t.post(ctx, "/info", map[string]any{"type": "openOrders", "user": user}, &orders)
 	return orders, err
 }
+
+// Candle is one candleSnapshot bar.
+type Candle struct {
+	OpenTime  int64           `json:"t"`
+	CloseTime int64           `json:"T"`
+	Open      decimal.Decimal `json:"o"`
+	High      decimal.Decimal `json:"h"`
+	Low       decimal.Decimal `json:"l"`
+	Close     decimal.Decimal `json:"c"`
+	Interval  string          `json:"i"`
+	Trades    int             `json:"n"`
+}
+
+// Candles returns bars for interval ("1m", "5m", "1h", ...) between start and
+// end (unix ms), oldest first. The API caps one response at 5000 bars.
+func (c *InfoClient) Candles(ctx context.Context, coin, interval string, start, end int64) ([]Candle, error) {
+	var out []Candle
+	err := c.t.post(ctx, "/info", map[string]any{"type": "candleSnapshot",
+		"req": map[string]any{"coin": coin, "interval": interval, "startTime": start, "endTime": end}}, &out)
+	return out, err
+}
+
+// Mid is the top-of-book mid, the price Papertrade settles at.
+func (c *InfoClient) Mid(ctx context.Context, coin string) (decimal.Decimal, error) {
+	b, err := c.L2Book(ctx, coin)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	if len(b.Levels[0]) == 0 || len(b.Levels[1]) == 0 {
+		return decimal.Zero, fmt.Errorf("hyperliquid %s book is one-sided", coin)
+	}
+	return b.Levels[0][0].Px.Add(b.Levels[1][0].Px).Div(decimal.NewFromInt(2)), nil
+}

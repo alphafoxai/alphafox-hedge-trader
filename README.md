@@ -1,83 +1,125 @@
 # alphafox-hedge-trader
 
-AlphaFox 的独立下单交易组件：Hyperliquid 钱包签名下单 + Papertrade 同平台多空挖矿。
+**Farm PAPER on [Papertrade](https://exchange.papertrade.xyz) with delta-neutral long + short pairs — from a local web console that picks your leverage and close move from live volatility.**
 
-Papertrade 是「亏损挖矿」永续：亏损方按亏损额铸造 PAPER，盈利方被收 2% 手续费并受价格冲击折扣。同一账户在 Paper 上同时开等额多空，价格移动后一起平仓：亏损腿铸币，盈利腿收回大部分，净成本 = 冲击折扣 + 2% 手续费。机制与成本测算见 `docs/paper-research.md`。
+[中文说明](#中文说明)
 
-背景：2026-10-11 会议《Paper交易项目机制讨论与对冲无损挖矿方案策划》；后续决定放弃 HL 对冲腿，改为同平台多空。
-
-## 结构
-
-| 包 | 职责 |
+| Light | Dark |
 |---|---|
-| `pkg/evmsign` | secp256k1 / EIP-712 签名原语与 `Signer` 接口 |
-| `pkg/hyperliquid` | 原生 Hyperliquid 客户端（L1 action 签名、下单/撤单/杠杆、info）；`farm` 用它的 l2Book mid 作价格源（Paper 按 HL BBO mid 结算） |
-| `pkg/venue` | 统一永续交易所接口（HL CLI 使用） |
-| `pkg/paper` | Papertrade relayer 网关：EIP-712 intent 签名（Open / Close / Stake / Unstake / Claim / RegisterSessionKey）、intentId、nonce、relayer 提交与查询（钱包 SSE、成交历史、交易参数、铸造曲线）、成本模型 |
-| `pkg/farm` | 多空挖矿循环：开两腿 → 盯价 → 触发后单个 intent 同时平两腿 → 从成交历史结算成本与 PAPER |
-| `pkg/paper/plan.go` | 滚动实现波动率 + 参数推荐（杠杆 / 平仓波动 / 爆仓保护） |
-| `pkg/console` | 本地 Web 控制台（`hedgectl web`）：代理 relayer、推荐参数、按品种运行 farm |
-| `cmd/hedgectl` | CLI，默认 dry-run（只签名不发送），`-live` 才提交 |
+| ![console, light](docs/images/console-light.png) | ![console, dark](docs/images/console-dark.png) |
 
-## 使用
+## Why
+
+Papertrade is a *loss-mining* perp on HyperEVM: every trade settles against the LP at the Hyperliquid BBO mid, and **the losing side mints PAPER** in proportion to its loss, while the winning side pays a 2% fee plus a move-dependent haircut. PAPER stakers receive the protocol's revenue.
+
+So open an equal **long and short on the same account**, wait for the price to move, and **close both legs in one intent**. The loser mints PAPER; the winner hands back most of that loss. Your net cost is only the haircut + fee — and it depends on *how far price moved*, not on position size:
+
+| Close move (BTC) | Cost per PAPER* |
+|---|---|
+| 0.03% (1000x, $20 account) | ~$0.014 |
+| 0.1% | ~$0.0077 |
+| 0.5% | ~$0.0043 |
+| 1% | ~$0.0038 |
+
+<sub>*At the 2026-10-11 mint rate of 36.8 PAPER per $1 of loss. ETH costs about 10% more at the same move. The full derivation from on-chain parameters is in [`docs/paper-research.md`](docs/paper-research.md) (Chinese).</sub>
+
+Bigger moves are cheaper per PAPER but take longer to happen, and the move you wait for has to fit inside the bust distance (≈ 1/leverage). Choosing those numbers well is what this tool does.
+
+## What's inside
+
+- **Web console** (`hedgectl web`), a local single-page app:
+  - **Rolling realized volatility** from Hyperliquid 1-minute candles (1h / 6h / 24h / 3d windows).
+  - **Parameter recommendations** for BTC and ETH from your capital and how long you're willing to wait per cycle:
+    - close move = σ·√wait;
+    - bust guard = max(5 bp, 6σ·√10s);
+    - leverage = the highest venue tier whose bust distance still covers move + guard.
+    - It also shows expected cycle time, cost/PAPER and PAPER/hour, and tells you when capital is too small.
+  - **One-click runs** per symbol: BTC and ETH can run in parallel. Each run shows live logs, net cost and PAPER minted, with stop or stop-and-close.
+  - **Wallet flow**: connect OKX (or any injected EVM wallet), generate a session key, and sign `RegisterSessionKey`. You can also close positions, stake all, or claim dividends.
+  - Light / dark theme.
+- **Farm engine** (`pkg/farm`) with tested safety invariants:
+  - It refuses to start unless the symbol is flat.
+  - A one-legged open is closed immediately.
+  - Both legs always close in a single intent, retried until confirmed.
+  - The bust guard closes before liquidation.
+  - Cancelling never leaves an unlogged position.
+- **Papertrade gateway** (`pkg/paper`), reverse-engineered from the official frontend and pinned by golden tests against real on-chain intents:
+  - EIP-712 intents: Open / Close / Stake / Unstake / Claim / RegisterSessionKey;
+  - intent ids, nonces;
+  - relayer submit, wallet SSE, trade history, and the mint curve.
+- **Hyperliquid client** (`pkg/hyperliquid`): L1 action signing checked against the official Python SDK, plus orders, cancels, leverage, l2Book, mid and candles.
+- **CLI** (`hedgectl`) for everything above.
+
+## Quick start
+
+Requires Go 1.25+.
 
 ```bash
-# Paper：只用 session key（能交易/质押，不能提现）；主钱包私钥不进入本仓库
-export PAPER_ACCOUNT_ADDRESS=0x...        # Paper 主钱包地址
-export PAPER_SESSION_PRIVATE_KEY=0x...    # 已注册的 session key
+go install github.com/alphafoxai/alphafox-hedge-trader/cmd/hedgectl@latest
 
-go run ./cmd/hedgectl paper status                      # 交易参数 + 铸造率（只读）
-go run ./cmd/hedgectl paper econ -coin BTC -notional 10000
-go run ./cmd/hedgectl paper account                     # 余额 / 仓位 / session key
-go run ./cmd/hedgectl farm run -coin BTC -margin 10 -leverage 1000 -close-move 0.0003 -bust-guard 0.0001
-                                                         # 只出计划和签名预览，不提交
-
-# 注册 session key（一次性，需主钱包在钱包里签名）
-go run ./cmd/hedgectl paper session-new                 # 生成 key，私钥只打印一次
-go run ./cmd/hedgectl paper register-data -session 0xKEY > reg.json   # 用主钱包 eth_signTypedData_v4 签名
-go run ./cmd/hedgectl paper register -data reg.json -signature 0xSIG  # 校验签名者；加 -live 才提交
-
-# Hyperliquid
-export HL_NETWORK=testnet HL_ACCOUNT_ADDRESS=0x... HL_AGENT_PRIVATE_KEY=0x...
-go run ./cmd/hedgectl hl quote -coin BTC
+hedgectl web           # http://127.0.0.1:8547 — DRY RUN: intents are signed and shown, never posted
+hedgectl web -live     # posts intents for real
 ```
 
-完整命令见 `go run ./cmd/hedgectl`。
+1. Deposit USDC on [Papertrade](https://exchange.papertrade.xyz). The minimum position is $10 margin and $10,000 notional per leg, so a pair needs at least $20 at 1000x; more capital allows lower leverage and cheaper PAPER.
+2. In the console, connect your wallet and click **生成并用钱包注册 session key** (generate & register a session key). Your wallet signs one `RegisterSessionKey` message.
+3. Enter your capital and acceptable wait, apply the recommendation, and start.
 
-## Web 控制台
+CLI equivalents: `hedgectl paper status | econ | account | trades`, `hedgectl farm run …`. Run `hedgectl` to see every command.
 
-```bash
-go run ./cmd/hedgectl web            # http://127.0.0.1:8547，dry-run：只签名预览
-go run ./cmd/hedgectl web -live      # 实盘：提交 intent
-```
+## Security model
 
-- **凭证只在浏览器**：账户地址和 session key 存在本浏览器 localStorage；页面每次写操作把 key 发给本机服务，服务端不落盘，只在运行中的 farm 内存里持有。可在页面里用 OKX 钱包生成并注册 session key（主钱包只签 `RegisterSessionKey`），也可导入 / 显示 / 清除。
-- **为什么要本地服务**：relayer 拒绝跨域请求（`/state/trading` 对外部 Origin 返回 400，`/intents` 不支持 OPTIONS），浏览器无法直连。
-- **安全**：只监听 loopback；校验 Host（防 DNS rebinding）；`/api` 需要页面内嵌的进程级随机 token（防 CSRF）。
-- **波动率与推荐**：从 Hyperliquid 拉 1 分钟 K 线，按可选窗口（1h / 6h / 24h / 3d）算滚动实现波动率 σ（每 √小时），总资金在 BTC / ETH 间平分，给出：
-  - 平仓波动 = σ·√(目标等待小时)，预计每轮耗时 = (波动/σ)²；
-  - 爆仓保护 = max(0.05%, 6σ·√10 秒)，且不超过平仓波动的一半；
-  - 杠杆 = 可用档位中，爆仓距离（1/杠杆 − 0.05%）≥ 平仓波动 + 保护 的最大档；资金不足以支撑最小名义时提示所需资金。
-  - 每 PAPER 成本只取决于平仓波动（波动越大越便宜，0.5% 以上接近 $0.004 下限），所以推荐在可接受的等待时间内取尽量大的波动、尽量低的杠杆。
-- **运行**：BTC / ETH 各一张卡片，可「应用推荐」后开始；两个品种可并行（启动时检查可用余额覆盖所有运行中的两腿保证金）。停止可选保留仓位或同时平仓；运行中禁止手动平仓以免冲突。Ctrl-C 退出时停止运行、保留仓位并打印 id。
+- **Your master key never touches this tool.**
+  - The master wallet signs exactly one thing, `RegisterSessionKey`, inside your own wallet.
+  - Trading uses a Paper **session key**. It can trade and stake but **cannot withdraw**, and it expires after at most 30 days.
+- **Credentials stay in your browser.**
+  - The account address and session key live in `localStorage`.
+  - The local server never writes them to disk; it holds a key in memory only while a run is active.
+- **The console is local-only.**
+  - It binds to loopback only and checks the Host header (DNS-rebinding defense).
+  - Every API call needs a per-process random token embedded in the page (CSRF defense).
+  - A local server is needed at all because the Papertrade relayer rejects cross-origin browser requests.
+- **Everything is dry-run by default**; `-live` is opt-in.
 
-ETH 的波动比 BTC 高约 1.5–1.8 倍（2026-10-11：BTC σ≈0.11%/√h，ETH≈0.17–0.20%/√h），同样等待时间可用更大的平仓波动；但 ETH 的冲击参数让同等波动下成本约高 10%，两者每 PAPER 成本接近。并行跑两个品种约翻倍产出。
+## Risks — read before using real money
 
-## 小资金约束（约 20U）
+- This is **experimental, unaudited software** and is not affiliated with Papertrade. The wire format is reverse-engineered and may break when Papertrade changes it.
+- **Losses are possible:**
+  - liquidation if price gaps through the bust guard (hard liquidation forfeits the whole margin);
+  - relayer or queue delays;
+  - one leg failing to open;
+  - rule changes, since the contracts are upgradeable.
+- **PAPER is currently non-transferable**; its value comes only from staking dividends. Hedged farming is close to zero-sum across all farmers: long-run dividends per PAPER tend toward the farming cost per PAPER, and the mint rate only goes down over time.
+- Nothing here is financial advice. Start with dry-run, then the minimum size.
 
-Paper 最小保证金 $10、最小开仓名义 $10,000，两腿共 $20 只能用 1000x。1000x 的爆仓距离约 0.05%，所以 `-close-move` 约 0.03%、`-bust-guard` 约 0.01%；按当前铸造率，单位成本约 $0.014/PAPER，是 100x / 0.5% 档的约 2 倍。`farm` 会拒绝 close-move + bust-guard 超过爆仓距离的配置。
-
-## 安全约束
-
-- 默认 dry-run；提交必须显式 `-live`。
-- 启动前要求该品种无持仓；`-live` 还检查交易未暂停、session key 已注册且未过期、可用余额 ≥ 2 × 保证金。
-- 只有一腿成交时立即平掉该腿；两腿始终在同一个 Close intent 中平仓，未确认则按超时重发。
-- Ctrl-C 不会自动平仓：仓位保持并打印，由人工处理。
-
-## 开发
+## Development
 
 ```bash
 go test -race ./...
 ```
 
-所有测试离线：Paper 线格式由链上真实 intent 的 golden 测试锁定，relayer 交互用 httptest，策略用假交易所 + 模拟时钟。
+All tests are offline:
+- Papertrade wire formats are pinned by on-chain golden intents.
+- Hyperliquid signing is pinned by vectors from the official SDK.
+- The relayer and Hyperliquid are faked with httptest.
+- The farm runs against a fake exchange and clock.
+
+Integration notes: [`docs/paper-integration.md`](docs/paper-integration.md).
+
+---
+
+## 中文说明
+
+**用同账户多空对冲在 Papertrade 上低成本挖 PAPER，附带本地 Web 控制台：按实时波动率推荐杠杆、平仓波动和爆仓保护。**
+
+- **原理**：Paper 是「亏损挖矿」永续，亏损方按亏损额铸造 PAPER，盈利方被收 2% 手续费和冲击折扣。同一账户开等额多空，价格移动后用一个 intent 同时平两腿，净成本只有折扣加手续费。每 PAPER 成本只取决于平仓时的价格波动幅度，与仓位大小无关：BTC 0.1% 约 $0.0077，0.5% 约 $0.0043。
+- **控制台**：`hedgectl web`，默认 dry-run，`-live` 才提交。
+  - 从 Hyperliquid 1 分钟 K 线计算滚动波动率 σ。
+  - 按资金和可接受的等待时间，推荐 BTC 和 ETH 各自的杠杆、平仓波动、爆仓保护，以及预计耗时、成本和每小时 PAPER 产出。
+  - 一键运行，两个品种可并行；支持停止、停止并平仓、质押、领取分红，有亮色和暗色主题。
+- **安全**：
+  - 主钱包只在自己的钱包里签一次 `RegisterSessionKey`。
+  - 交易用的 session key 只能交易和质押，不能提现，只存在本浏览器 localStorage。
+  - 本地服务只监听 loopback，校验 Host 和随机 token。
+- **风险**：实验性软件，未经审计，与 Papertrade 官方无关。可能因爆仓、单腿成交、规则变更而亏损。PAPER 目前不可转让。不构成投资建议，请先用 dry-run 和最小仓位试。
+- 详细机制与成本推导见 [`docs/paper-research.md`](docs/paper-research.md)。
